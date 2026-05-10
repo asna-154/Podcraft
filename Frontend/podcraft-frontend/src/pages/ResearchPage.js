@@ -23,6 +23,7 @@ const ResearchPage = () => {
     const [activeCategory, setActiveCategory] = useState('all');
     const [activeTab, setActiveTab] = useState('all');
 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
         fetchData();
     }, [id]);
@@ -58,7 +59,7 @@ const ResearchPage = () => {
             if (res.data.isBookmarked) {
                 const item = research.find(r => r._id === researchId);
                 setBookmarked([...bookmarked,
-                    { ...item, isBookmarked: true }]);
+                { ...item, isBookmarked: true }]);
             } else {
                 setBookmarked(bookmarked.filter(b => b._id !== researchId));
             }
@@ -364,7 +365,7 @@ const ResearchPage = () => {
                                     <span style={styles.sourceLabel}>
                                         📰 Source:
                                     </span>
-                                    <a 
+                                    <a
                                         href={item.sourceUrl}
                                         target="_blank"
                                         rel="noopener noreferrer"

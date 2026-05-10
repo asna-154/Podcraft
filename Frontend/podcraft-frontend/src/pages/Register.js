@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
-import { registerUser } from '../utils/api';
+import { registerUser } from '../utils/api'; // eslint-disable-line no-unused-vars
 import { useAuth } from '../context/AuthContext';
 
 const Register = () => {

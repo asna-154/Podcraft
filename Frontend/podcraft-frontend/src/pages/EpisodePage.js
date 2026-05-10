@@ -28,10 +28,10 @@ const EpisodePage = () => {
         bio: ''
     });
 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
         fetchEpisode();
     }, [id]);
-
     const fetchEpisode = async () => {
         try {
             const res = await getEpisode(id);
@@ -226,9 +226,9 @@ const EpisodePage = () => {
                                         style={styles.select}
                                     >
                                         {['Casual', 'Professional',
-                                          'Humorous', 'Serious'].map(t => (
-                                            <option key={t} value={t}>{t}</option>
-                                        ))}
+                                            'Humorous', 'Serious'].map(t => (
+                                                <option key={t} value={t}>{t}</option>
+                                            ))}
                                     </select>
                                 </div>
                             </div>
