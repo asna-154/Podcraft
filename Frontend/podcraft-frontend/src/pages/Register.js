@@ -27,64 +27,39 @@ const Register = () => {
     };
 
     const handleSubmit = async (e) => {
-    e.preventDefault();
-    
-    console.log("Form submitted");
-    console.log("Data to send:", {
-        fullName: formData.fullName,
-        email: formData.email,
-        password: formData.password
-    });
+        e.preventDefault();
 
-    if (formData.password !== formData.confirmPassword) {
-        toast.error('Passwords do not match');
-        return;
-    }
+        if (formData.password !== formData.confirmPassword) {
+            toast.error('Passwords do not match');
+            return;
+        }
 
-    if (formData.password.length < 8) {
-        toast.error('Password must be at least 8 characters');
-        return;
-    }
+        if (formData.password.length < 8) {
+            toast.error('Password must be at least 8 characters');
+            return;
+        }
 
-    if (!validatePassword(formData.password)) {
-        toast.error('Password must contain uppercase, number and special character');
-        return;
-    }
+        if (!validatePassword(formData.password)) {
+            toast.error('Password must contain uppercase, number and special character');
+            return;
+        }
 
-    setLoading(true);
-    
-    try {
-        console.log("Calling API...");
-        const response = await fetch('http://localhost:5000/api/auth/register', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
+        setLoading(true);
+        try {
+            const res = await registerUser({
                 fullName: formData.fullName,
                 email: formData.email,
                 password: formData.password
-            })
-        });
-        
-        console.log("Response received:", response.status);
-        const data = await response.json();
-        console.log("Response data:", data);
-        
-        if (response.ok) {
-            login(data.user, data.token);
-            toast.success('Account created successfully!');
+            });
+            login(res.data.user, res.data.token);
+            toast.success('Account created successfully! Welcome to PodCraft!');
             navigate('/dashboard');
-        } else {
-            toast.error(data.message || 'Registration failed');
+        } catch (error) {
+            toast.error(error.response?.data?.message || 'Registration failed');
+        } finally {
+            setLoading(false);
         }
-    } catch (error) {
-        console.log("Fetch error:", error);
-        toast.error('Network error: ' + error.message);
-    } finally {
-        setLoading(false);
-    }
-};
+    };
 
     const getPasswordStrength = () => {
         const { password } = formData;
@@ -173,8 +148,8 @@ const Register = () => {
                                         ...styles.strengthFill,
                                         background: strength.color,
                                         width: strength.label === 'Too Short' ? '25%' :
-                                               strength.label === 'Weak' ? '50%' :
-                                               strength.label === 'Medium' ? '75%' : '100%'
+                                            strength.label === 'Weak' ? '50%' :
+                                                strength.label === 'Medium' ? '75%' : '100%'
                                     }} />
                                 </div>
                                 <span style={{ ...styles.strengthLabel, color: strength.color }}>
@@ -212,8 +187,8 @@ const Register = () => {
                         </div>
                         {formData.confirmPassword &&
                             formData.password !== formData.confirmPassword && (
-                            <span style={styles.errorText}>Passwords do not match</span>
-                        )}
+                                <span style={styles.errorText}>Passwords do not match</span>
+                            )}
                     </div>
 
                     {/* Password Rules */}
