@@ -26,6 +26,8 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+// Debug route
 app.get('/api/debug-routes', (req, res) => {
     const routes = [];
     app._router.stack.forEach(middleware => {
@@ -60,48 +62,63 @@ const connectDB = async () => {
     }
 };
 
-// Apply DB connection ONLY to actual API routes
-app.use('/api/auth', async (req, res, next) => {
-    try {
-        await connectDB();
-        next();
-    } catch (error) {
+// ============ LOAD ROUTES WITH ERROR HANDLING ============
+console.log('=== Starting to load routes ===');
+
+try {
+    console.log('Attempting to load authRoutes...');
+    const authRoutes = require('./routes/authRoutes');
+    app.use('/api/auth', authRoutes);
+    console.log('✅ authRoutes loaded successfully');
+} catch (error) {
+    console.error('❌ FAILED to load authRoutes:', error.message);
+    console.error('Full error:', error);
+    // Add a fallback route so we know it failed
+    app.use('/api/auth', (req, res) => {
         res.status(500).json({ 
             success: false, 
-            message: 'Database connection failed',
+            message: 'Auth routes failed to load',
             error: error.message 
         });
-    }
-});
+    });
+}
 
-app.use('/api/episodes', async (req, res, next) => {
-    try {
-        await connectDB();
-        next();
-    } catch (error) {
+try {
+    console.log('Attempting to load episodeRoutes...');
+    const episodeRoutes = require('./routes/episodeRoutes');
+    app.use('/api/episodes', episodeRoutes);
+    console.log('✅ episodeRoutes loaded successfully');
+} catch (error) {
+    console.error('❌ FAILED to load episodeRoutes:', error.message);
+    console.error('Full error:', error);
+    app.use('/api/episodes', (req, res) => {
         res.status(500).json({ 
             success: false, 
-            message: 'Database connection failed' 
+            message: 'Episode routes failed to load',
+            error: error.message 
         });
-    }
-});
+    });
+}
 
-app.use('/api/research', async (req, res, next) => {
-    try {
-        await connectDB();
-        next();
-    } catch (error) {
+try {
+    console.log('Attempting to load researchRoutes...');
+    const researchRoutes = require('./routes/researchRoutes');
+    app.use('/api/research', researchRoutes);
+    console.log('✅ researchRoutes loaded successfully');
+} catch (error) {
+    console.error('❌ FAILED to load researchRoutes:', error.message);
+    console.error('Full error:', error);
+    app.use('/api/research', (req, res) => {
         res.status(500).json({ 
             success: false, 
-            message: 'Database connection failed' 
+            message: 'Research routes failed to load',
+            error: error.message 
         });
-    }
-});
+    });
+}
 
-// Routes
-app.use('/api/auth', require('./routes/authRoutes'));
-app.use('/api/episodes', require('./routes/episodeRoutes'));
-app.use('/api/research', require('./routes/researchRoutes'));
+console.log('=== Finished loading routes ===');
+// ============ END ROUTE LOADING ============
 
 // Test endpoint to verify API is working
 app.get('/api/test', (req, res) => {
