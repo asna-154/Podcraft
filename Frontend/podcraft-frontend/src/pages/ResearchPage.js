@@ -23,9 +23,9 @@ const ResearchPage = () => {
     const [activeCategory, setActiveCategory] = useState('all');
     const [activeTab, setActiveTab] = useState('all');
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
         fetchData();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id]);
 
     const fetchData = async () => {

@@ -28,9 +28,9 @@ const EpisodePage = () => {
         bio: ''
     });
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
         fetchEpisode();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id]);
     const fetchEpisode = async () => {
         try {
