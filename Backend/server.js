@@ -26,6 +26,15 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+app.get('/api/debug-routes', (req, res) => {
+    const routes = [];
+    app._router.stack.forEach(middleware => {
+        if (middleware.route) {
+            routes.push(`${Object.keys(middleware.route.methods)} ${middleware.route.path}`);
+        }
+    });
+    res.json({ routes });
+});
 
 // Database connection with caching for serverless
 let isConnected = false;
