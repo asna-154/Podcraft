@@ -10,7 +10,7 @@ connectDB();
 const app = express();
 
 app.use(cors({
-    origin: ['https://podcraft-taupe.vercel.app', 'http://localhost:3000'],
+    origin: ['https://podcraft-taupe.vercel.app', 'http://localhost:3000', 'http://13.61.216.50'],
     credentials: true
 }));
 
