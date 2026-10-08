@@ -1,85 +1,63 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
+const { trim, mongoId } = require('./helpers');
 
-const guestSchema = new mongoose.Schema({
-    name: {
-        type: String,
-        required: true,
-        trim: true
-    },
-    profession: {
-        type: String,
-        trim: true
-    },
-    url: {
-        type: String,
-        trim: true
-    },
-    bio: {
-        type: String,
-        trim: true
-    },
-    generatedSummary: {
-        type: String,
-        trim: true
-    }
-});
+const NICHES = [
+  'Technology', 'Business & Entrepreneurship', 'Health & Wellness',
+  'True Crime', 'Education', 'Entertainment', 'Sports',
+  'Politics & News', 'Science', 'Personal Development',
+  'Finance', 'Arts & Culture', 'History', 'Comedy',
+  'Religion & Spirituality', 'Society & Culture',
+  'Kids & Family', 'Music', 'Travel', 'Food',
+];
 
-const episodeSchema = new mongoose.Schema({
-    user: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true
-    },
+// userId is added automatically by the association in models/index.js.
+// Guests are no longer embedded: they live in their own table (models/Guest.js).
+// bookmarkedTopics is a many-to-many link, also set up in models/index.js.
+const Episode = sequelize.define(
+  'Episode',
+  {
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    _id: mongoId(),
     podcastNiche: {
-        type: String,
-        required: [true, 'Podcast niche is required'],
-        enum: [
-            'Technology', 'Business & Entrepreneurship', 'Health & Wellness',
-            'True Crime', 'Education', 'Entertainment', 'Sports',
-            'Politics & News', 'Science', 'Personal Development',
-            'Finance', 'Arts & Culture', 'History', 'Comedy',
-            'Religion & Spirituality', 'Society & Culture',
-            'Kids & Family', 'Music', 'Travel', 'Food'
-        ]
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      validate: {
+        notNull: { msg: 'Podcast niche is required' },
+        isIn: { args: [NICHES], msg: 'Invalid podcast niche' },
+      },
     },
     episodeTopic: {
-        type: String,
-        required: [true, 'Episode topic is required'],
-        maxlength: [200, 'Topic cannot exceed 200 characters'],
-        trim: true
+      type: DataTypes.STRING(200),
+      allowNull: false,
+      set: trim('episodeTopic'),
+      validate: {
+        notNull: { msg: 'Episode topic is required' },
+        notEmpty: { msg: 'Episode topic is required' },
+        len: { args: [1, 200], msg: 'Topic cannot exceed 200 characters' },
+      },
     },
     tone: {
-        type: String,
-        enum: ['Casual', 'Professional', 'Humorous', 'Serious'],
-        default: 'Professional'
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'Professional',
+      validate: { isIn: { args: [['Casual', 'Professional', 'Humorous', 'Serious']], msg: 'Invalid tone' } },
     },
-    episodeDuration: {
-        type: Number,
-        default: 60
-    },
-    guests: {
-        type: [guestSchema],
-        validate: {
-            validator: function(guests) {
-                return guests.length <= 3;
-            },
-            message: 'Maximum 3 guests allowed per episode'
-        }
-    },
+    episodeDuration: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 60 },
     status: {
-        type: String,
-        enum: ['draft', 'research', 'planning', 'complete'],
-        default: 'draft'
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'draft',
+      validate: { isIn: { args: [['draft', 'research', 'planning', 'complete']], msg: 'Invalid status' } },
     },
     researchStatus: {
-        type: String,
-        enum: ['pending', 'processing', 'complete', 'failed'],
-        default: 'pending'
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'pending',
+      validate: { isIn: { args: [['pending', 'processing', 'complete', 'failed']], msg: 'Invalid research status' } },
     },
-    bookmarkedTopics: [{
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Research'
-    }]
-}, { timestamps: true });
+  },
+  { tableName: 'episodes', timestamps: true }
+);
 
-module.exports = mongoose.model('Episode', episodeSchema);
+module.exports = Episode;

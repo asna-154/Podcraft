@@ -1,13 +1,15 @@
-const mongoose = require('mongoose');
+// config/db.js  (replaces the Mongoose version)
+const sequelize = require('./database');
+require('../models'); // loads every model and its relationships once, at startup
 
 const connectDB = async () => {
     try {
-        const conn = await mongoose.connect(process.env.MONGO_URI, {
-            serverSelectionTimeoutMS: 30000,
-            socketTimeoutMS: 45000,
-            family: 4
-        });
-        console.log(`MongoDB Connected: ${conn.connection.host}`);
+        await sequelize.authenticate();
+        console.log(`SQL Server Connected: ${process.env.DB_HOST}/${process.env.DB_NAME}`);
+
+        await sequelize.sync();          // <-- add this
+        console.log('Tables synced');
+        
     } catch (error) {
         console.error(`Error: ${error.message}`);
     }

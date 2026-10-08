@@ -8,15 +8,16 @@ const generateToken = (id) => {
     });
 };
 
+// Emails are stored lowercase, so look them up lowercase too
+const normalizeEmail = (email) => String(email).trim().toLowerCase();
+
 // @desc    Register new user
 // @route   POST /api/auth/register
 const registerUser = async (req, res, next) => {
     console.log("=== REGISTER FUNCTION STARTED ===");
-    console.log("Request body:", req.body);
-    
+
     try {
         const { fullName, email, password } = req.body;
-        console.log("Destructured:", { fullName, email, password });
 
         // Check all fields provided
         if (!fullName || !email || !password) {
@@ -29,9 +30,9 @@ const registerUser = async (req, res, next) => {
 
         console.log("About to check User.findOne");
         // Check if user exists
-        const userExists = await User.findOne({ email });
-        console.log("User exists check completed:", userExists);
-        
+        const userExists = await User.findOne({ where: { email: normalizeEmail(email) } });
+        console.log("User exists check completed:", !!userExists);
+
         if (userExists) {
             return res.status(400).json({
                 success: false,
@@ -71,11 +72,18 @@ const registerUser = async (req, res, next) => {
         console.log("Error name:", error.name);
         console.log("Error message:", error.message);
         console.log("Error stack:", error.stack);
-        
+
+        // Two people registering the same email at the same moment
+        if (error.name === 'SequelizeUniqueConstraintError') {
+            return res.status(400).json({
+                success: false,
+                message: 'An account with this email already exists'
+            });
+        }
+
         res.status(500).json({
             success: false,
-            message: error.message,
-            stack: error.stack  // This will now show in your frontend
+            message: error.message
         });
     }
 };
@@ -94,7 +102,7 @@ const loginUser = async (req, res) => {
         }
 
         // Find user
-        const user = await User.findOne({ email });
+        const user = await User.findOne({ where: { email: normalizeEmail(email) } });
         if (!user) {
             return res.status(401).json({
                 success: false,
@@ -169,7 +177,9 @@ const loginUser = async (req, res) => {
 // @route   GET /api/auth/me
 const getMe = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('-password');
+        const user = await User.findByPk(req.user.id, {
+            attributes: { exclude: ['password'] }
+        });
         res.status(200).json({
             success: true,
             user
@@ -188,11 +198,11 @@ const updateAccount = async (req, res) => {
     try {
         const { fullName, email, notificationPreferences } = req.body;
 
-        const user = await User.findById(req.user.id);
+        const user = await User.findByPk(req.user.id);
 
         if (fullName) user.fullName = fullName;
         if (email) user.email = email;
-        if (notificationPreferences) 
+        if (notificationPreferences)
             user.notificationPreferences = notificationPreferences;
 
         await user.save();
@@ -221,7 +231,7 @@ const updatePassword = async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
 
-        const user = await User.findById(req.user.id);
+        const user = await User.findByPk(req.user.id);
 
         // Check current password
         const isMatch = await user.matchPassword(currentPassword);
@@ -276,7 +286,7 @@ const logoutUser = async (req, res) => {
 // @route   DELETE /api/auth/delete
 const deleteAccount = async (req, res) => {
     try {
-        await User.findByIdAndDelete(req.user.id);
+        await User.destroy({ where: { id: req.user.id } });
         res.status(200).json({
             success: true,
             message: 'Account deleted successfully'

@@ -4,7 +4,7 @@ const User = require('../models/User');
 const protect = async (req, res, next) => {
     let token;
 
-    if (req.headers.authorization && 
+    if (req.headers.authorization &&
         req.headers.authorization.startsWith('Bearer')) {
         try {
             // Get token from header
@@ -14,7 +14,9 @@ const protect = async (req, res, next) => {
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
             // Get user from token (exclude password)
-            req.user = await User.findById(decoded.id).select('-password');
+            req.user = await User.findByPk(decoded.id, {
+                attributes: { exclude: ['password'] }
+            });
 
             if (!req.user) {
                 return res.status(401).json({

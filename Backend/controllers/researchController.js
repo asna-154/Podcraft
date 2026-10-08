@@ -1,5 +1,63 @@
-const Research = require('../models/Research');
-const Episode = require('../models/Episode');
+const { sequelize, Research, Episode, EpisodeBookmark } = require('../models');
+
+// Ids are numbers now. Anything else (e.g. an old MongoDB id) simply "isn't found".
+const isId = (value) => /^\d+$/.test(String(value));
+
+// The React app was written for MongoDB documents, so research items keep that shape:
+// `_id`, plus `episode` and `user` holding the related ids.
+const shapeResearch = (research) => {
+    const json = research.toJSON();
+    json.episode = String(research.episodeId);
+    json.user = String(research.userId);
+    return json;
+};
+
+// Finds an episode and checks it belongs to the logged in user.
+// If either check fails it sends the error response itself and returns null.
+const findOwnedEpisode = async (req, res, episodeId) => {
+    const episode = isId(episodeId) ? await Episode.findByPk(episodeId) : null;
+
+    if (!episode) {
+        res.status(404).json({
+            success: false,
+            message: 'Episode not found'
+        });
+        return null;
+    }
+
+    if (String(episode.userId) !== String(req.user.id)) {
+        res.status(401).json({
+            success: false,
+            message: 'Not authorized'
+        });
+        return null;
+    }
+
+    return episode;
+};
+
+// Same check for a single research topic
+const findOwnedResearch = async (req, res, researchId) => {
+    const research = isId(researchId) ? await Research.findByPk(researchId) : null;
+
+    if (!research) {
+        res.status(404).json({
+            success: false,
+            message: 'Research topic not found'
+        });
+        return null;
+    }
+
+    if (String(research.userId) !== String(req.user.id)) {
+        res.status(401).json({
+            success: false,
+            message: 'Not authorized'
+        });
+        return null;
+    }
+
+    return research;
+};
 
 // Research data generator based on niche and topic
 const generateResearchData = (niche, topic) => {
@@ -387,28 +445,18 @@ const generateResearchData = (niche, topic) => {
 // @route   POST /api/research/generate/:episodeId
 const generateResearch = async (req, res) => {
     try {
-        const episode = await Episode.findById(req.params.episodeId);
-
-        if (!episode) {
-            return res.status(404).json({
-                success: false,
-                message: 'Episode not found'
-            });
-        }
-
-        if (episode.user.toString() !== req.user.id) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized'
-            });
-        }
+        const episode = await findOwnedEpisode(req, res, req.params.episodeId);
+        if (!episode) return;
 
         // Update episode research status
         episode.researchStatus = 'processing';
         await episode.save();
 
-        // Delete existing research for fresh generation
-        await Research.deleteMany({ episode: episode._id });
+        // Delete existing research for fresh generation (bookmark links go first)
+        await sequelize.transaction(async (t) => {
+            await EpisodeBookmark.destroy({ where: { episodeId: episode.id }, transaction: t });
+            await Research.destroy({ where: { episodeId: episode.id }, transaction: t });
+        });
 
         // Generate research data
         const researchData = generateResearchData(
@@ -423,13 +471,17 @@ const generateResearch = async (req, res) => {
         // Save research to database
         const researchDocs = limitedData.map(item => ({
             ...item,
-            episode: episode._id,
-            user: req.user.id,
+            episodeId: episode.id,
+            userId: req.user.id,
             niche: episode.podcastNiche,
             topic: episode.episodeTopic
         }));
 
-        const savedResearch = await Research.insertMany(researchDocs);
+        await Research.bulkCreate(researchDocs, { validate: true });
+        const savedResearch = await Research.findAll({
+            where: { episodeId: episode.id },
+            order: [['id', 'ASC']]
+        });
 
         // Update episode status
         episode.researchStatus = 'complete';
@@ -440,7 +492,7 @@ const generateResearch = async (req, res) => {
             success: true,
             message: 'Research generated successfully',
             count: savedResearch.length,
-            research: savedResearch
+            research: savedResearch.map(shapeResearch)
         });
 
     } catch (error) {
@@ -455,49 +507,38 @@ const generateResearch = async (req, res) => {
 // @route   GET /api/research/:episodeId
 const getResearch = async (req, res) => {
     try {
-        const episode = await Episode.findById(req.params.episodeId);
-
-        if (!episode) {
-            return res.status(404).json({
-                success: false,
-                message: 'Episode not found'
-            });
-        }
-
-        if (episode.user.toString() !== req.user.id) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized'
-            });
-        }
+        const episode = await findOwnedEpisode(req, res, req.params.episodeId);
+        if (!episode) return;
 
         const { filter, category } = req.query;
 
-        let query = {
-            episode: req.params.episodeId,
+        const where = {
+            episodeId: episode.id,
             isRejected: false
         };
 
         // Filter by category
         if (category && category !== 'all') {
-            query.category = category;
+            where.category = category;
         }
 
-        let research = await Research.find(query)
-            .sort({ relevanceScore: -1 });
+        let research = await Research.findAll({
+            where,
+            order: [['relevanceScore', 'DESC']]
+        });
 
         // Filter by recency
         if (filter === 'recent') {
             research = research.filter(r =>
-                r.publicationDate.includes('day') ||
-                r.publicationDate.includes('hour')
+                (r.publicationDate || '').includes('day') ||
+                (r.publicationDate || '').includes('hour')
             );
         }
 
         res.status(200).json({
             success: true,
             count: research.length,
-            research
+            research: research.map(shapeResearch)
         });
 
     } catch (error) {
@@ -512,27 +553,13 @@ const getResearch = async (req, res) => {
 // @route   PUT /api/research/:researchId/bookmark
 const bookmarkTopic = async (req, res) => {
     try {
-        const research = await Research.findById(req.params.researchId);
-
-        if (!research) {
-            return res.status(404).json({
-                success: false,
-                message: 'Research topic not found'
-            });
-        }
-
-        if (research.user.toString() !== req.user.id) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized'
-            });
-        }
+        const research = await findOwnedResearch(req, res, req.params.researchId);
+        if (!research) return;
 
         // Check max bookmarks (10 per episode)
         if (!research.isBookmarked) {
-            const bookmarkCount = await Research.countDocuments({
-                episode: research.episode,
-                isBookmarked: true
+            const bookmarkCount = await Research.count({
+                where: { episodeId: research.episodeId, isBookmarked: true }
             });
 
             if (bookmarkCount >= 10) {
@@ -548,13 +575,12 @@ const bookmarkTopic = async (req, res) => {
         await research.save();
 
         // Update episode bookmarked topics
-        const episode = await Episode.findById(research.episode);
+        const episode = await Episode.findByPk(research.episodeId);
         if (research.isBookmarked) {
-            episode.bookmarkedTopics.addToSet(research._id);
+            await episode.addBookmarkedTopic(research);
         } else {
-            episode.bookmarkedTopics.pull(research._id);
+            await episode.removeBookmarkedTopic(research);
         }
-        await episode.save();
 
         res.status(200).json({
             success: true,
@@ -576,30 +602,16 @@ const bookmarkTopic = async (req, res) => {
 // @route   PUT /api/research/:researchId/reject
 const rejectTopic = async (req, res) => {
     try {
-        const research = await Research.findById(req.params.researchId);
-
-        if (!research) {
-            return res.status(404).json({
-                success: false,
-                message: 'Research topic not found'
-            });
-        }
-
-        if (research.user.toString() !== req.user.id) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized'
-            });
-        }
+        const research = await findOwnedResearch(req, res, req.params.researchId);
+        if (!research) return;
 
         research.isRejected = true;
         research.isBookmarked = false;
         await research.save();
 
         // Remove from episode bookmarks if it was bookmarked
-        const episode = await Episode.findById(research.episode);
-        episode.bookmarkedTopics.pull(research._id);
-        await episode.save();
+        const episode = await Episode.findByPk(research.episodeId);
+        await episode.removeBookmarkedTopic(research);
 
         res.status(200).json({
             success: true,
@@ -618,31 +630,18 @@ const rejectTopic = async (req, res) => {
 // @route   GET /api/research/:episodeId/bookmarks
 const getBookmarkedTopics = async (req, res) => {
     try {
-        const episode = await Episode.findById(req.params.episodeId);
+        const episode = await findOwnedEpisode(req, res, req.params.episodeId);
+        if (!episode) return;
 
-        if (!episode) {
-            return res.status(404).json({
-                success: false,
-                message: 'Episode not found'
-            });
-        }
-
-        if (episode.user.toString() !== req.user.id) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized'
-            });
-        }
-
-        const bookmarkedTopics = await Research.find({
-            episode: req.params.episodeId,
-            isBookmarked: true
+        const bookmarkedTopics = await Research.findAll({
+            where: { episodeId: episode.id, isBookmarked: true },
+            order: [['id', 'ASC']]
         });
 
         res.status(200).json({
             success: true,
             count: bookmarkedTopics.length,
-            bookmarkedTopics
+            bookmarkedTopics: bookmarkedTopics.map(shapeResearch)
         });
 
     } catch (error) {
@@ -657,26 +656,12 @@ const getBookmarkedTopics = async (req, res) => {
 // @route   POST /api/research/refresh/:episodeId
 const refreshResearch = async (req, res) => {
     try {
-        const episode = await Episode.findById(req.params.episodeId);
-
-        if (!episode) {
-            return res.status(404).json({
-                success: false,
-                message: 'Episode not found'
-            });
-        }
-
-        if (episode.user.toString() !== req.user.id) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized'
-            });
-        }
+        const episode = await findOwnedEpisode(req, res, req.params.episodeId);
+        if (!episode) return;
 
         // Delete non-bookmarked research
-        await Research.deleteMany({
-            episode: episode._id,
-            isBookmarked: false
+        await Research.destroy({
+            where: { episodeId: episode.id, isBookmarked: false }
         });
 
         // Generate fresh research
@@ -688,9 +673,8 @@ const refreshResearch = async (req, res) => {
         const resultLimit = req.user.subscription === 'premium' ? 8 : 5;
 
         // Filter out already bookmarked titles
-        const bookmarked = await Research.find({
-            episode: episode._id,
-            isBookmarked: true
+        const bookmarked = await Research.findAll({
+            where: { episodeId: episode.id, isBookmarked: true }
         });
         const bookmarkedTitles = bookmarked.map(b => b.title);
 
@@ -700,24 +684,24 @@ const refreshResearch = async (req, res) => {
 
         const newDocs = freshData.map(item => ({
             ...item,
-            episode: episode._id,
-            user: req.user.id,
+            episodeId: episode.id,
+            userId: req.user.id,
             niche: episode.podcastNiche,
             topic: episode.episodeTopic
         }));
 
-        await Research.insertMany(newDocs);
+        await Research.bulkCreate(newDocs, { validate: true });
 
-        const allResearch = await Research.find({
-            episode: episode._id,
-            isRejected: false
-        }).sort({ relevanceScore: -1 });
+        const allResearch = await Research.findAll({
+            where: { episodeId: episode.id, isRejected: false },
+            order: [['relevanceScore', 'DESC']]
+        });
 
         res.status(200).json({
             success: true,
             message: 'Research refreshed successfully',
             count: allResearch.length,
-            research: allResearch
+            research: allResearch.map(shapeResearch)
         });
 
     } catch (error) {

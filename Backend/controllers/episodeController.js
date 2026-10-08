@@ -1,5 +1,76 @@
-const Episode = require('../models/Episode');
-const Research = require('../models/Research');
+const { Op } = require('sequelize');
+const { sequelize, Episode, Guest, Research, EpisodeBookmark } = require('../models');
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// Ids are numbers now. Anything else (e.g. an old MongoDB id) simply "isn't found".
+const isId = (value) => /^\d+$/.test(String(value));
+
+// Fields a user is allowed to change through PUT /api/episodes/:id
+const EDITABLE_FIELDS = [
+    'podcastNiche', 'episodeTopic', 'tone', 'episodeDuration', 'status', 'researchStatus'
+];
+
+const guestOrder = [{ model: Guest, as: 'guests' }, 'id', 'ASC'];
+
+// What to load together with an episode: its guests and its bookmarked research.
+// full = whole research items (like Mongoose populate), otherwise only their ids.
+const relations = (full) => [
+    { model: Guest, as: 'guests' },
+    {
+        model: Research,
+        as: 'bookmarkedTopics',
+        through: { attributes: [] },
+        ...(full ? {} : { attributes: ['id'] })
+    }
+];
+
+// The React app was written for MongoDB documents, so responses keep that shape:
+// `_id`, `user` (the owner's id), `guests`, and `bookmarkedTopics`.
+const shapeEpisode = (episode, full = false) => {
+    const json = episode.toJSON();
+    json.user = String(episode.userId);
+    json.guests = json.guests || [];
+    const topics = json.bookmarkedTopics || [];
+    json.bookmarkedTopics = full
+        ? topics.map(t => ({ ...t, episode: String(t.episodeId), user: String(t.userId) }))
+        : topics.map(t => String(t.id));
+    return json;
+};
+
+// Finds an episode and checks it belongs to the logged in user.
+// If either check fails it sends the error response itself and returns null.
+const findOwnedEpisode = async (req, res, episodeId, notAuthorizedMessage = 'Not authorized', options = {}) => {
+    const episode = isId(episodeId) ? await Episode.findByPk(episodeId, options) : null;
+
+    if (!episode) {
+        res.status(404).json({
+            success: false,
+            message: 'Episode not found'
+        });
+        return null;
+    }
+
+    // Make sure episode belongs to logged in user
+    if (String(episode.userId) !== String(req.user.id)) {
+        res.status(401).json({
+            success: false,
+            message: notAuthorizedMessage
+        });
+        return null;
+    }
+
+    return episode;
+};
+
+const loadGuests = (episodeId) =>
+    Guest.findAll({ where: { episodeId }, order: [['id', 'ASC']] });
+
+// ---------------------------------------------------------------------------
+// Controllers
+// ---------------------------------------------------------------------------
 
 // @desc    Create new episode intent
 // @route   POST /api/episodes
@@ -21,9 +92,11 @@ const createEpisode = async (req, res) => {
             startOfMonth.setDate(1);
             startOfMonth.setHours(0, 0, 0, 0);
 
-            const episodeCount = await Episode.countDocuments({
-                user: req.user.id,
-                createdAt: { $gte: startOfMonth }
+            const episodeCount = await Episode.count({
+                where: {
+                    userId: req.user.id,
+                    createdAt: { [Op.gte]: startOfMonth }
+                }
             });
 
             if (episodeCount >= 3) {
@@ -36,7 +109,7 @@ const createEpisode = async (req, res) => {
 
         // Create episode
         const episode = await Episode.create({
-            user: req.user.id,
+            userId: req.user.id,
             podcastNiche,
             episodeTopic,
             tone: tone || 'Professional',
@@ -47,7 +120,7 @@ const createEpisode = async (req, res) => {
         res.status(201).json({
             success: true,
             message: 'Episode intent created successfully',
-            episode
+            episode: shapeEpisode(episode)
         });
 
     } catch (error) {
@@ -62,13 +135,16 @@ const createEpisode = async (req, res) => {
 // @route   GET /api/episodes
 const getEpisodes = async (req, res) => {
     try {
-        const episodes = await Episode.find({ user: req.user.id })
-            .sort({ createdAt: -1 });
+        const episodes = await Episode.findAll({
+            where: { userId: req.user.id },
+            include: relations(false),
+            order: [['createdAt', 'DESC'], guestOrder]
+        });
 
         res.status(200).json({
             success: true,
             count: episodes.length,
-            episodes
+            episodes: episodes.map(e => shapeEpisode(e))
         });
 
     } catch (error) {
@@ -83,27 +159,16 @@ const getEpisodes = async (req, res) => {
 // @route   GET /api/episodes/:id
 const getEpisode = async (req, res) => {
     try {
-        const episode = await Episode.findById(req.params.id)
-            .populate('bookmarkedTopics');
-
-        if (!episode) {
-            return res.status(404).json({
-                success: false,
-                message: 'Episode not found'
-            });
-        }
-
-        // Make sure episode belongs to logged in user
-        if (episode.user.toString() !== req.user.id) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized to access this episode'
-            });
-        }
+        const episode = await findOwnedEpisode(
+            req, res, req.params.id,
+            'Not authorized to access this episode',
+            { include: relations(true), order: [guestOrder] }
+        );
+        if (!episode) return;
 
         res.status(200).json({
             success: true,
-            episode
+            episode: shapeEpisode(episode, true)
         });
 
     } catch (error) {
@@ -118,33 +183,26 @@ const getEpisode = async (req, res) => {
 // @route   PUT /api/episodes/:id
 const updateEpisode = async (req, res) => {
     try {
-        let episode = await Episode.findById(req.params.id);
-
-        if (!episode) {
-            return res.status(404).json({
-                success: false,
-                message: 'Episode not found'
-            });
-        }
-
-        // Make sure episode belongs to logged in user
-        if (episode.user.toString() !== req.user.id) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized to update this episode'
-            });
-        }
-
-        episode = await Episode.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true, runValidators: true }
+        const episode = await findOwnedEpisode(
+            req, res, req.params.id, 'Not authorized to update this episode'
         );
+        if (!episode) return;
+
+        const updates = {};
+        EDITABLE_FIELDS.forEach((field) => {
+            if (req.body[field] !== undefined) updates[field] = req.body[field];
+        });
+        await episode.update(updates);
+
+        const updated = await Episode.findByPk(episode.id, {
+            include: relations(false),
+            order: [guestOrder]
+        });
 
         res.status(200).json({
             success: true,
             message: 'Episode updated successfully',
-            episode
+            episode: shapeEpisode(updated)
         });
 
     } catch (error) {
@@ -159,26 +217,17 @@ const updateEpisode = async (req, res) => {
 // @route   DELETE /api/episodes/:id
 const deleteEpisode = async (req, res) => {
     try {
-        const episode = await Episode.findById(req.params.id);
+        const episode = await findOwnedEpisode(
+            req, res, req.params.id, 'Not authorized to delete this episode'
+        );
+        if (!episode) return;
 
-        if (!episode) {
-            return res.status(404).json({
-                success: false,
-                message: 'Episode not found'
-            });
-        }
-
-        // Make sure episode belongs to logged in user
-        if (episode.user.toString() !== req.user.id) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized to delete this episode'
-            });
-        }
-
-        // Also delete associated research
-        await Research.deleteMany({ episode: req.params.id });
-        await Episode.findByIdAndDelete(req.params.id);
+        // Also delete associated research (and guests): the database does this
+        // automatically when the episode goes. Bookmarks are cleared first.
+        await sequelize.transaction(async (t) => {
+            await EpisodeBookmark.destroy({ where: { episodeId: episode.id }, transaction: t });
+            await episode.destroy({ transaction: t });
+        });
 
         res.status(200).json({
             success: true,
@@ -206,24 +255,12 @@ const addGuest = async (req, res) => {
             });
         }
 
-        const episode = await Episode.findById(req.params.id);
-
-        if (!episode) {
-            return res.status(404).json({
-                success: false,
-                message: 'Episode not found'
-            });
-        }
-
-        if (episode.user.toString() !== req.user.id) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized'
-            });
-        }
+        const episode = await findOwnedEpisode(req, res, req.params.id);
+        if (!episode) return;
 
         // Max 3 guests check
-        if (episode.guests.length >= 3) {
+        const guestCount = await Guest.count({ where: { episodeId: episode.id } });
+        if (guestCount >= 3) {
             return res.status(400).json({
                 success: false,
                 message: 'Maximum 3 guests allowed per episode'
@@ -233,7 +270,8 @@ const addGuest = async (req, res) => {
         // Generate guest summary based on provided info
         const generatedSummary = generateGuestSummary(name, profession, bio);
 
-        episode.guests.push({
+        await Guest.create({
+            episodeId: episode.id,
             name,
             profession,
             url,
@@ -241,12 +279,10 @@ const addGuest = async (req, res) => {
             generatedSummary
         });
 
-        await episode.save();
-
         res.status(200).json({
             success: true,
             message: 'Guest added successfully',
-            guests: episode.guests
+            guests: await loadGuests(episode.id)
         });
 
     } catch (error) {
@@ -261,23 +297,12 @@ const addGuest = async (req, res) => {
 // @route   PUT /api/episodes/:id/guests/:guestId
 const editGuest = async (req, res) => {
     try {
-        const episode = await Episode.findById(req.params.id);
+        const episode = await findOwnedEpisode(req, res, req.params.id);
+        if (!episode) return;
 
-        if (!episode) {
-            return res.status(404).json({
-                success: false,
-                message: 'Episode not found'
-            });
-        }
-
-        if (episode.user.toString() !== req.user.id) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized'
-            });
-        }
-
-        const guest = episode.guests.id(req.params.guestId);
+        const guest = isId(req.params.guestId)
+            ? await Guest.findOne({ where: { id: req.params.guestId, episodeId: episode.id } })
+            : null;
         if (!guest) {
             return res.status(404).json({
                 success: false,
@@ -296,12 +321,12 @@ const editGuest = async (req, res) => {
             guest.bio
         );
 
-        await episode.save();
+        await guest.save();
 
         res.status(200).json({
             success: true,
             message: 'Guest updated successfully',
-            guests: episode.guests
+            guests: await loadGuests(episode.id)
         });
 
     } catch (error) {
@@ -316,32 +341,17 @@ const editGuest = async (req, res) => {
 // @route   DELETE /api/episodes/:id/guests/:guestId
 const deleteGuest = async (req, res) => {
     try {
-        const episode = await Episode.findById(req.params.id);
+        const episode = await findOwnedEpisode(req, res, req.params.id);
+        if (!episode) return;
 
-        if (!episode) {
-            return res.status(404).json({
-                success: false,
-                message: 'Episode not found'
-            });
+        if (isId(req.params.guestId)) {
+            await Guest.destroy({ where: { id: req.params.guestId, episodeId: episode.id } });
         }
-
-        if (episode.user.toString() !== req.user.id) {
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized'
-            });
-        }
-
-        episode.guests = episode.guests.filter(
-            g => g._id.toString() !== req.params.guestId
-        );
-
-        await episode.save();
 
         res.status(200).json({
             success: true,
             message: 'Guest removed successfully',
-            guests: episode.guests
+            guests: await loadGuests(episode.id)
         });
 
     } catch (error) {
@@ -356,15 +366,16 @@ const deleteGuest = async (req, res) => {
 // @route   GET /api/episodes/history
 const getEpisodeHistory = async (req, res) => {
     try {
-        const episodes = await Episode.find({
-            user: req.user.id,
-            status: 'complete'
-        }).sort({ createdAt: -1 });
+        const episodes = await Episode.findAll({
+            where: { userId: req.user.id, status: 'complete' },
+            include: relations(false),
+            order: [['createdAt', 'DESC'], guestOrder]
+        });
 
         res.status(200).json({
             success: true,
             count: episodes.length,
-            episodes
+            episodes: episodes.map(e => shapeEpisode(e))
         });
 
     } catch (error) {
